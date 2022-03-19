@@ -2,7 +2,6 @@ use crate::{MatchSpec, PackageRecord, Range, Version};
 use itertools::Itertools;
 use once_cell::sync::OnceCell;
 use pubgrub::version_set::VersionSet;
-use smallvec::SmallVec;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Display, Formatter};
@@ -97,37 +96,39 @@ impl MatchSpecConstraints {
                 groups: vec![MatchSpecElement::any()],
             }
         } else {
-            let mut permutations = Vec::with_capacity(self.groups.len());
+            let mut groups: HashSet<_> = [MatchSpecElement::any()].into();
+            let mse_none = MatchSpecElement::none();
             for spec in self.groups.iter() {
-                let mut group_entries: SmallVec<[MatchSpecElement; 2]> = SmallVec::new();
+                let mut next = HashSet::new();
                 let version_complement = spec.version.negate();
                 if version_complement != Range::none() {
-                    group_entries.push(MatchSpecElement {
+                    let version_complement = MatchSpecElement {
                         version: version_complement,
                         build_number: Range::any(),
-                    });
+                    };
+                    next.extend(
+                        groups
+                            .iter()
+                            .map(|o| o.intersection(&version_complement))
+                            .filter(|n| n != &mse_none),
+                    );
                 }
 
                 let build_complement = spec.build_number.negate();
                 if build_complement != Range::none() {
-                    group_entries.push(MatchSpecElement {
+                    let build_complement = MatchSpecElement {
                         version: Range::any(),
-                        build_number: spec.build_number.negate(),
-                    });
+                        build_number: build_complement,
+                    };
+                    next.extend(
+                        groups
+                            .iter()
+                            .map(|o| o.intersection(&build_complement))
+                            .filter(|n| n != &mse_none),
+                    );
                 }
 
-                permutations.push(group_entries);
-            }
-
-            let mut groups = HashSet::new();
-            for perm in permutations.into_iter().multi_cartesian_product() {
-                let group = perm.into_iter().reduce(|a, b| a.intersection(&b)).unwrap();
-
-                if group == MatchSpecElement::any() {
-                    return MatchSpecConstraints::from(group);
-                } else if group != MatchSpecElement::none() {
-                    groups.insert(group);
-                }
+                groups = next;
             }
 
             Self {
@@ -180,7 +181,7 @@ impl VersionSet for MatchSpecConstraints {
             }
         }
 
-        dbg!("-- NOT CACHED", self);
+        // dbg!("-- NOT CACHED", self);
 
         let complement = self.compute_complement();
         {
@@ -216,6 +217,8 @@ impl VersionSet for MatchSpecConstraints {
             e.hash(&mut hasher);
             hasher.finish()
         });
+
+        groups.dedup();
 
         Self { groups }
     }
